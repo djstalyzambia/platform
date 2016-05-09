@@ -241,6 +241,10 @@ box-sizing: inherit;
 
 /* Checkout Choice */
 
+.cm-checkout-choose{
+	margin:0 auto;
+}
+
 .cm-checkout-choose span{
 		font-size: 12px;
 	  padding:60px 30px 15px 30px;
