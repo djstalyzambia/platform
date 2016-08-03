@@ -75,7 +75,7 @@ class AssetPlant extends PlantBase {
 		return $result;
 	}
 
-	protected function getStoredAssets($asset_details,$type='fulfillment') {
+	protected function getStoredAssets($asset_details,$type='fulfillment',$session_id=false) {
 		$result = false; // default return
 		if (!is_array($asset_details)) {
 			// if $asset details isn't an array, assume it's an id
@@ -117,7 +117,7 @@ class AssetPlant extends PlantBase {
 			// if we've got a good result, unlock all the assets for download
 			// (user is either admin or allowed by element...)
 			foreach ($result as $asset) {
-				$this->unlockAsset($asset['id']);
+				$this->unlockAsset($asset['id'],$session_id);
 			}
 		}
 
@@ -403,21 +403,21 @@ class AssetPlant extends PlantBase {
 	 * Adds an unlock state to platform session persistent store
 	 *
 	 * @return boolean
-	 */protected function unlockAsset($id) {
+	 */protected function unlockAsset($id,$session_id=false) {
+	 	CASHSystem::startSession($session_id);
 		$current_unlocked_assets = $this->sessionGet('unlocked_assets');
+		if (!is_array($current_unlocked_assets)) {
+			$current_unlocked_assets = array();
+		}
 		$assets_to_unlock = array($id);
 		$asset = $this->getAssetInfo($id);
-		$error_state = false;
+
 		foreach ($assets_to_unlock as $asset_id) {
-			if (is_array($current_unlocked_assets)) {
-				$current_unlocked_assets[""."$asset_id"] = true;
-				$this->sessionSet('unlocked_assets',$current_unlocked_assets);
-			} else {
-				$this->sessionSet('unlocked_assets',array(""."$asset_id" => true));
-			}
-			$current_unlocked_assets = $this->sessionGet('unlocked_assets');
+			$current_unlocked_assets[""."$asset_id"] = true;
 		}
-		if (is_array($current_unlocked_assets)) {
+		$this->sessionSet('unlocked_assets',$current_unlocked_assets);
+
+		if (count($current_unlocked_assets)) {
 			return true;
 		} else {
 			return false;
@@ -428,11 +428,13 @@ class AssetPlant extends PlantBase {
 	 * Returns true if an assetIsUnlocked, false if not
 	 *
 	 * @return boolean
-	 */protected function getUnlockedStatus($id) {
+	 */protected function getUnlockedStatus($id,$session_id=false) {
+		CASHSystem::startSession($session_id);
 		if ($this->getPublicStatus($id)) {
 			return true;
 		}
 		$current_unlocked_assets = $this->sessionGet('unlocked_assets');
+
 		if (is_array($current_unlocked_assets)) {
 			if (array_key_exists(""."$id",$current_unlocked_assets)) {
 				if ($current_unlocked_assets[""."$id"] === true) {
@@ -593,8 +595,8 @@ class AssetPlant extends PlantBase {
 	 *
 	 * @param {integer} $id - the asset you are trying to retrieve
 	 * @return string
-	 */protected function redirectToAsset($id,$element_id=0) {
-		if ($this->getUnlockedStatus($id)) {
+	 */protected function redirectToAsset($id,$element_id=0,$session_id=false) {
+		//if ($this->getUnlockedStatus($id,$session_id)) {
 			$asset = $this->getAssetInfo($id);
 			$final_asset_location = $this->getFinalAssetLocation(
 				$asset['connection_id'],
@@ -613,7 +615,13 @@ class AssetPlant extends PlantBase {
 					'unknown asset type, please as an admin to check the asset type'
 				);
 			}
+			/*
+		} else {
+			// fail back to the default embed with an error string
+			CASHSystem::redirectToUrl(CASH_PUBLIC_URL . '/request/embed/' . $element_id . '?redirecterror=1&session_id=' . $session_id);
+			die();
 		}
+		*/
 	}
 
 	protected function getUploadParameters($connection_id,$user_id) {

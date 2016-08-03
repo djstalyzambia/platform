@@ -92,15 +92,18 @@
 	 * Sets the initial CASH session_id and cookie on the user's machine
 	 *
 	 * @return boolean
-	 */public function startSession($reset_session_id=false,$force_session_id=false) {
+	 */public function startSession($force_session_id=false,$sandbox=false) {
 		// if 'session_id' is already set in script store then we've already started
 		// the session in this script, do not hammer the database needlessly
 		$newsession = false;
 		$expiration = false;
-		if (!$this->sessionGet('start_time','script') || $reset_session_id || $force_session_id) {
-			if ($force_session_id) {
-				$this->sessionSet('session_id',$force_session_id,'script');
-			}
+		$generate_key = false;
+		$previous_session = false;
+		if (!$this->db) $this->connectDB();
+		if ($force_session_id) {
+			$this->sessionSet('session_id',$force_session_id,'script');
+		}
+		if (!$this->sessionGet('start_time','script') || $force_session_id) {
 			// first make sure we have a valid session
 			$current_session = $this->getAllSessionData();
 			if ($current_session['persistent'] && isset($current_session['expiration_date'])) {
@@ -108,8 +111,6 @@
 				if ($current_session['expiration_date'] < time()) {
 					$this->sessionClearAll();
 					$current_session['persistent'] = false;
-					$reset_session_id = false;
-					$force_session_id = false;
 				}
 			}
 			$expiration = time() + $this->cash_session_timeout;
@@ -118,23 +119,35 @@
 			if ($force_session_id) {
 				// if we're forcing an id, we're almost certainly in our JS session stuff
 				$session_id = $force_session_id;
-				// we SHOULD rotate ids here, but that's hard to keep in sync on the JS side
-				// revisit this later:
-				//$reset_session_id = true;
 			}
 			if ($session_id) {
-				// if there is an existing cookie that's not expired, use it as the
-				$previous_session = array(
-					'session_id' => array(
-						'condition' => '=',
-						'value' => $session_id
+				$session_exists = $this->db->getData(
+					'sessions',
+					'id',
+					array(
+						"session_id" => array(
+							"condition" => "=",
+							"value" => $session_id
+						)
 					)
 				);
+				if ($session_exists) {
+					// if there is an existing session that's not expired, use it
+					$previous_session = array(
+						'session_id' => array(
+							'condition' => '=',
+							'value' => $session_id
+						)
+					);
+				} 
 			} else {
 				// create a new session
 				$newsession = true;
-				$session_id = md5($current_ip['ip'] . rand(10000,99999)) . time(); // IP + random, hashed, plus timestamo
+				$generate_key = true;
 				$previous_session = false;
+			}
+			if ($generate_key || $sandbox) {
+				$session_id = md5($current_ip['ip'] . rand(10000,99999)) . time(); // IP + random, hashed, plus timestamo
 			}
 			$session_data = array(
 				'session_id' => $session_id,
@@ -142,11 +155,6 @@
 				'client_ip' => $current_ip['ip'],
 				'client_proxy' => $current_ip['proxy']
 			);
-			if ($reset_session_id) {
-				// forced session reset
-				$session_id = md5($current_ip['ip'] . rand(10000,99999)) . time();
-				$session_data['session_id'] = $session_id;
-			}
 			if (!$current_session['persistent']) {
 				// no existing session, set up empty data
 				$session_data['data'] = json_encode(array(
@@ -156,17 +164,20 @@
 			// set the session info
 			$this->sessionSet('session_id',$session_id,'script');
 			$this->sessionSet('start_time',time(),'script');
+
 			// set the database session data
-			if (!$this->db) $this->connectDB();
 			$this->db->setData(
 				'sessions',
 				$session_data,
 				$previous_session
 			);
-			// set the client-side cookie
-			if (!headers_sent()) {
-				// no headers yet, we can just send the cookie through
-				setcookie('cashmusic_session', $session_id, $expiration, '/');
+
+			if (!$sandbox && !$force_session_id) {
+				// set the client-side cookie
+				if (!headers_sent()) {
+					// no headers yet, we can just send the cookie through
+					setcookie('cashmusic_session', $session_id, $expiration, '/');
+				}
 			}
 		} else {
 			$session_id = $this->sessionGet('session_id','script');
@@ -225,14 +236,10 @@
 	 *
 	 * @return boolean
 	 */protected function getSessionID() {
-		if ($this->sessionGet('session_id','script') || isset($_COOKIE['cashmusic_session'])) {
-			if (!$this->sessionGet('session_id','script')) {
-				$this->sessionSet('session_id',$_COOKIE['cashmusic_session'],'script');
-			}
-			return $this->sessionGet('session_id','script');
-		} else {
-			return false;
+		if (!$this->sessionGet('session_id','script') && isset($_COOKIE['cashmusic_session'])) {
+			$this->sessionSet('session_id',$_COOKIE['cashmusic_session'],'script');
 		}
+		return $this->sessionGet('session_id','script');
 	}
 
 	/**
@@ -279,7 +286,6 @@
 					$this->resetSession();
 					$session_data['persistent'] = array();
 				}
-				$session_id = $this->getSessionID();
 				$session_data['persistent'][(string)$key] = $value;
 				$expiration = time() + $this->cash_session_timeout;
 				if (!$this->db) $this->connectDB();
@@ -296,14 +302,11 @@
 						)
 					)
 				);
-
+				return true;
 				// ERROR LOGGING
 				// error_log('writing ' . $key . '(' . json_encode($value) . ') to session: ' . $session_id);
-
-				return true;
-			} else {
-				return false;
 			}
+			return false;
 		} else {
 			// set scope to 'script' -- or you know, whatever
 			if (!isset($GLOBALS['cashmusic_script_store'])) {

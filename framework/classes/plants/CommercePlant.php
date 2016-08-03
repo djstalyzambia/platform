@@ -496,7 +496,7 @@ class CommercePlant extends PlantBase {
         return $result;
     }
 
-    protected function emailBuyersByItem($user_id,$item_id,$subject,$message,$include_download=false) {
+    protected function emailBuyersByItem($user_id,$connection_id,$item_id,$subject,$message,$include_download=false) {
 
         if (CASH_DEBUG) {
             error_log(
@@ -525,25 +525,18 @@ class CommercePlant extends PlantBase {
                 )
             );
 
-
-            $user_request = new CASHRequest(
-                array(
-                    'cash_request_type' => 'people',
-                    'cash_action' => 'getuser',
-                    'user_id' => $user_id
-                )
-            );
-            $user_details = $user_request->response['payload'];
-
-            if ($user_details['display_name'] == 'Anonymous' || !$user_details['display_name']) {
-                $user_details['display_name'] = $user_details['email_address'];
-            }
-
             //TODO: move these to the outer solar system in their own template
 
             $recipients = array();
             $tmp_recipients = array();
             $all_orders = $this->getOrdersByItem($user_id,$item_id);
+
+            // if there are no orders, let's cheese it
+            //TODO: no error being displayed
+            if (empty($all_orders)) {
+                return false;
+            }
+
             foreach ($all_orders as $order) {
                 $tmp_recipients[] = $order['customer_email'];
             }
@@ -556,10 +549,8 @@ class CommercePlant extends PlantBase {
             }
 
             if (count($recipients)) {
-                if (file_exists(CASH_PLATFORM_ROOT . '/lib/markdown/markdown.php')) {
-                    include_once(CASH_PLATFORM_ROOT . '/lib/markdown/markdown.php');
-                }
-                $html_message = Markdown($message);
+
+                $html_message = CASHSystem::parseMarkdown($message);
 
                 if ($include_download) {
                     $asset_request = new CASHRequest(
@@ -573,7 +564,7 @@ class CommercePlant extends PlantBase {
                         $unlock_suffix = 1;
                         $all_assets = array();
                         if ($asset_request->response['payload']['type'] == 'file') {
-                            $message .= "\n\n" . 'Download fuh at '.CASH_PUBLIC_URL.'/download/?code=*|UNLOCKCODE1|*';
+                            $message .= "\n\n" . 'Download *|ITEMNAME|*: at '.CASH_PUBLIC_URL.'/download/?code=*|UNLOCKCODE1|*';
                             $html_message .= "\n\n" . '<p><b><a href="'.CASH_PUBLIC_URL.'/download/?code=*|UNLOCKCODE1|*">Download *|ITEMNAME|*</a></b></p>';
                             $all_assets[] = array(
                                 'id' => $item_details['fulfillment_asset'],
@@ -666,33 +657,23 @@ class CommercePlant extends PlantBase {
                             $all_vars = array();
                             $unlock_suffix = 1;
 
-                            if (!CASHSystem::sendEmail(
-                                $subject,
-                                $user_id,
-                                $recipient['email'],
-                                $recipient_message,
-                                $subject,                // this seems more appropriate than hardcoding something
-                                false                    // tell sendEmail we're sending a full encoded HTML body
-                            )) {
-                                //TODO: sendEmail is returning false even though everything is sending correctly.
-                                //$success = false;
-                            }
                         }
                     }
                 }
-
-/*                $mandrill = new MandrillSeed($user_id,$connection_id);
-                $result = $mandrill->send(
+                
+                // by the power of grayskull
+                CASHSystem::sendMassEmail(
+                    $user_id,
                     $subject,
-                    $message,
-                    $html_message,
-                    $user_details['email_address'],
-                    $user_details['display_name'],
                     $recipients,
-                    null,
+                    $html_message,
+                    $subject,
                     $global_merge_vars,
-                    $merge_vars
-                );*/
+                    $merge_vars,
+                    false,
+                    true
+                );
+
                 if (!$success) return false;
 
                 return true;
@@ -704,7 +685,7 @@ class CommercePlant extends PlantBase {
 
     protected function addToCart($item_id,$element_id,$item_variant=false,$price=false,$session_id=false) {
          $r = new CASHRequest();
-         $r->startSession(false,$session_id);
+         $r->startSession($session_id);
 
          $cart = $r->sessionGet('cart');
          if (!$cart) {
@@ -737,7 +718,7 @@ class CommercePlant extends PlantBase {
 
     protected function editCartQuantity($item_id,$element_id,$qty,$item_variant='',$session_id=false) {
         $r = new CASHRequest();
-        $r->startSession(false,$session_id);
+        $r->startSession($session_id);
 
         $cart = $r->sessionGet('cart');
         if (!$cart) {
@@ -763,7 +744,7 @@ class CommercePlant extends PlantBase {
 
     protected function editCartShipping($element_id,$region='r1',$session_id=false) {
         $r = new CASHRequest();
-        $r->startSession(false,$session_id);
+        $r->startSession($session_id);
 
         $cart = $r->sessionGet('cart');
         if (!$cart) {
@@ -781,7 +762,7 @@ class CommercePlant extends PlantBase {
 
     protected function emptyCart($element_id,$session_id=false) {
          $r = new CASHRequest();
-         $r->startSession(false,$session_id);
+         $r->startSession($session_id);
          $cart = $r->sessionGet('cart');
          if ($cart) {
             if (isset($cart[$element_id])) {
@@ -794,7 +775,7 @@ class CommercePlant extends PlantBase {
 
     protected function getCart($element_id,$session_id=false) {
         $r = new CASHRequest();
-        $r->startSession(false,$session_id);
+        $r->startSession($session_id);
         $cart = $r->sessionGet('cart');
         if ($cart) {
            if (isset($cart[$element_id])) {
@@ -1391,7 +1372,7 @@ class CommercePlant extends PlantBase {
         //TODO: store last seen top URL
         //      or maybe make the API accept GET params? does it already? who can know?
         //$r = new CASHRequest();
-        $this->startSession(false,$session_id);
+        $this->startSession($session_id);
         if (!$element_id) {
             return false;
         } else {
@@ -1563,7 +1544,7 @@ class CommercePlant extends PlantBase {
                 'customer_postalcode' => $shipping_info['postalcode'],
                 'customer_countrycode' => $shipping_info['country']);
 
-            $this->startSession(false,$session_id);
+            $this->startSession($session_id);
             $this->sessionSet('shipping_info',$shipping_info_formatted);
 
             if ($order_id) {
@@ -1732,7 +1713,7 @@ class CommercePlant extends PlantBase {
 
     public function finalizePayment($order_id, $token, $email_address=false, $customer_name=false, $shipping_info=false, $session_id=false, $total_price=false, $description=false, $finalize_url=false) {
 
-      $this->startSession(false,$session_id);
+      $this->startSession($session_id);
 
       // this just checks to see if we've started finalizing already. really
       // only an issue for embeds used on pages
